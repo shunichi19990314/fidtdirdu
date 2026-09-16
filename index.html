@@ -2,19 +2,24 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Proxied Site Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manga Viewer</title>
     <style>
-        body { margin: 0; font-family: system-ui, sans-serif; background: #f0f2f5; }
-        #proxy-container { background: white; width: 100%; min-height: 100vh; }
-        .loading { text-align: center; padding: 50px; color: #666; }
+        body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #1a1a1a; color: #fff; }
+        #proxy-container { width: 100%; min-height: 100vh; background: #fff; color: #000; }
+        .loading { 
+            display: flex; justify-content: center; align-items: center; 
+            height: 100vh; font-size: 1.2rem; color: #888; background: #1a1a1a;
+        }
+        /* プロキシ先サイトのスタイルが崩れないよう、コンテナ内はリセットしない */
     </style>
 </head>
 <body>
-    <div id="proxy-container" class="loading">読み込み中...</div>
+    <div id="proxy-container" class="loading">サイトを読み込み中...</div>
 
     <script>
         // 設定
-        const WORKER_URL = "https://manga.shunichi-0314.workers.dev/";
+        const WORKER_URL = "https://manga.shunichi-0314.workers.dev";
         const container = document.getElementById('proxy-container');
 
         // 初期表示
@@ -22,22 +27,20 @@
 
         // ブラウザの戻る/進むボタン対応
         window.addEventListener('popstate', () => {
-            initRouter(false); // pushStateしない
+            initRouter(false);
         });
 
         async function initRouter(shouldPushState = true) {
-            // URLからパスを取得 (?path=/about -> /about)
             const params = new URLSearchParams(window.location.search);
             const path = params.get('path') || '/';
-            
             await loadProxiedPage(path, shouldPushState);
         }
 
         async function loadProxiedPage(path, shouldPushState = true) {
-            container.classList.add('loading');
-            container.innerHTML = '読み込み中...';
+            container.className = 'loading';
+            container.innerHTML = 'サイトを読み込み中...';
 
-            // 1. URLをRenderのドメインで更新 (History API)
+            // 1. アドレスバーのURLを更新 (SPA化)
             if (shouldPushState) {
                 const newUrl = `${window.location.origin}/?path=${encodeURIComponent(path)}`;
                 history.pushState({ path }, '', newUrl);
@@ -50,44 +53,49 @@
                 
                 let html = await response.text();
 
-                // 3. 【重要】HTML内の「WorkerのURL」を「RenderのURL」に置換
+                // 3. 【核心】HTML内の「WorkerのURL」を「RenderのURL」に置換
                 html = rewriteUrlsForRender(html);
 
                 // 4. DOMに展開
-                container.classList.remove('loading');
+                container.className = '';
                 container.innerHTML = html;
 
-                // 5. スクリプトタグの再評価（リダイレクトJSなどを実行させる）
+                // 5. スクリプトタグの再評価（リダイレクトJSや動的読み込みを実行）
                 evalScripts(container);
 
-                // 6. ページ内リンクのクリックをインターセプト（SPA遷移化）
+                // 6. ページ内リンクのクリックをインターセプト（ページ遷移を乗っ取る）
                 interceptLinks(container);
 
             } catch (error) {
                 console.error("Load failed:", error);
-                container.innerText = "サイトの読み込みに失敗しました。";
+                container.className = 'loading';
+                container.innerHTML = `
+                    <div style="text-align:center; padding: 50px;">
+                        <h2>読み込みに失敗しました</h2>
+                        <p>${error.message}</p>
+                        <p style="font-size:0.9rem; color:#666;">
+                            ※ ターゲットサイトがCloudflare等のボット保護によりアクセスを拒否している可能性があります。
+                        </p>
+                    </div>
+                `;
             }
         }
 
         // --- ユーティリティ関数 ---
 
-        // HTML内のWorker URLを、RenderのURL（?path=...形式）に置換する
         function rewriteUrlsForRender(html) {
-            const workerOrigin = new URL(WORKER_URL).origin;
+            const workerOrigin = WORKER_URL;
             const selfOrigin = window.location.origin;
             
-            // 正規表現で WorkerのURL (https://worker.../path) を検出
-            // 引用符で囲まれたURLをマッチさせる
+            // "https://manga.shunichi-0314.workers.dev/path" または '...' を検出
             const regex = new RegExp(`(["'])${workerOrigin}(/[^"'\s]*)?\\1`, 'g');
             
             return html.replace(regex, (match, quote, path) => {
                 const safePath = path || '/';
-                // RenderのURL (?path=/...) に書き換え
                 return `${quote}${selfOrigin}/?path=${encodeURIComponent(safePath)}${quote}`;
             });
         }
 
-        // スクリプトタグを再評価して実行する
         function evalScripts(root) {
             const scripts = root.querySelectorAll('script');
             scripts.forEach(oldScript => {
@@ -100,20 +108,19 @@
             });
         }
 
-        // ページ内のリンククリックを捕捉し、ページリロードなしで遷移させる
         function interceptLinks(root) {
-            root.querySelectorAll('a').forEach(link => {
-                link.addEventListener('click', (e) => {
-                    const href = link.getAttribute('href');
-                    // 自分自身のドメイン（Render）へのリンクならインターセプト
-                    if (href && href.startsWith(window.location.origin)) {
-                        e.preventDefault();
-                        const url = new URL(href);
-                        const path = url.searchParams.get('path') || '/';
-                        loadProxiedPage(path);
-                    }
-                    // 外部リンクはそのまま遷移させる
-                });
+            root.addEventListener('click', (e) => {
+                const link = e.target.closest('a');
+                if (!link) return;
+                
+                const href = link.getAttribute('href');
+                // 自分自身のドメイン（Render）へのリンクならインターセプト
+                if (href && href.startsWith(window.location.origin)) {
+                    e.preventDefault();
+                    const url = new URL(href);
+                    const path = url.searchParams.get('path') || '/';
+                    loadProxiedPage(path);
+                }
             });
         }
     </script>
