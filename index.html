@@ -2,24 +2,17 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Proxied Site Viewer</title>
     <style>
         body { margin: 0; font-family: system-ui, sans-serif; background: #f0f2f5; }
-        #proxy-container { 
-            background: white; 
-            width: 100%; 
-            min-height: 100vh; 
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
+        #proxy-container { background: white; width: 100%; min-height: 100vh; }
+        .loading { text-align: center; padding: 50px; color: #666; }
     </style>
 </head>
 <body>
-    <!-- プロキシ先のHTMLがここに展開されます -->
-    <div id="proxy-container">読み込み中...</div>
+    <div id="proxy-container" class="loading">読み込み中...</div>
 
     <script>
-        // Cloudflare Worker のURL
         const WORKER_URL = "https://manga.shunichi-0314.workers.dev/";
 
         async function loadProxiedSite() {
@@ -29,19 +22,18 @@
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 
                 const html = await response.text();
+                container.classList.remove('loading');
                 container.innerHTML = html;
 
                 // ★重要: innerHTMLで挿入された<script>タグは実行されないため、再評価する
+                // Workerが返したリダイレクト用のJSもここで実行される
                 const scripts = container.querySelectorAll('script');
                 scripts.forEach(oldScript => {
                     const newScript = document.createElement('script');
-                    // 属性(srcやtypeなど)をコピー
                     Array.from(oldScript.attributes).forEach(attr => {
                         newScript.setAttribute(attr.name, attr.value);
                     });
-                    // インラインスクリプトの中身をコピー
                     newScript.textContent = oldScript.textContent;
-                    // 古いタグと置き換えることでブラウザに再実行させる
                     oldScript.parentNode.replaceChild(newScript, oldScript);
                 });
             } catch (error) {
